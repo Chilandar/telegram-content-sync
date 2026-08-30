@@ -3,7 +3,8 @@ import re
 import tempfile
 from pathlib import Path
 
-import fitz  # PyMuPDF
+import fitz
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -15,28 +16,40 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 AUTHOR = "@Tarikhgan"
+
+PORT = int(os.environ.get("PORT", 10000))
+
+app_web = Flask(__name__)
+
+telegram_app = (
+    Application.builder()
+    .token(BOT_TOKEN)
+    .updater(None)
+    .build()
+)
 
 WAITING_FOR_NAME = 1
 
 
-def safe_filename(name: str) -> str:
+def safe_filename(name):
     name = name.strip()
 
     if name.lower().endswith(".pdf"):
         name = name[:-4].strip()
 
-    name = re.sub(r'[<>:"/\\|?*]', '', name)
+    name = re.sub(r'[<>:"/\\|?*]', "", name)
     name = name.rstrip(" .")
 
     return name or "Untitled"
 
 
-def change_metadata(input_path: str, output_path: str, title: str):
+def change_metadata(input_path, output_path, title):
     doc = fitz.open(input_path)
 
     metadata = doc.metadata
+
     metadata["title"] = title
     metadata["author"] = AUTHOR
     metadata["subject"] = ""
@@ -59,7 +72,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton(
                 "📚 فایل‌های من",
-                callback_data="list_files"
+                callback_data="list_files",
             )
         ]
     ]
@@ -84,23 +97,26 @@ async def receive_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     files = context.user_data.setdefault("files", [])
 
-    # file_id در خود تلگرام ذخیره می‌شود
-    files.append({
-        "file_id": document.file_id,
-        "name": document.file_name,
-    })
+    files.append(
+        {
+            "file_id": document.file_id,
+            "name": document.file_name,
+        }
+    )
 
     await update.message.reply_text(
         f"✅ دریافت شد:\n{document.file_name}\n\n"
         f"تعداد فایل‌های فعلی: {len(files)}",
-        reply_markup=InlineKeyboardMarkup([
+        reply_markup=InlineKeyboardMarkup(
             [
-                InlineKeyboardButton(
-                    "📚 فایل‌های من",
-                    callback_data="list_files"
-                )
+                [
+                    InlineKeyboardButton(
+                        "📚 فایل‌های من",
+                        callback_data="list_files",
+                    )
+                ]
             ]
-        ]),
+        ),
     )
 
 
@@ -119,12 +135,14 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
 
     for i, file_info in enumerate(files):
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{i + 1}️⃣ {file_info['name']}",
-                callback_data=f"select:{i}"
-            )
-        ])
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"{i + 1}️⃣ {file_info['name']}",
+                    callback_data=f"select:{i}",
+                )
+            ]
+        )
 
     await query.edit_message_text(
         "📚 فایل‌های شما:\n\n"
@@ -153,32 +171,31 @@ async def select_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton(
                 "✏️ تغییر نام",
-                callback_data="rename"
+                callback_data="rename",
             )
         ],
         [
             InlineKeyboardButton(
                 "📤 ارسال فایل",
-                callback_data="send"
+                callback_data="send",
             )
         ],
         [
             InlineKeyboardButton(
                 "🗑 حذف از لیست",
-                callback_data="delete"
+                callback_data="delete",
             )
         ],
         [
             InlineKeyboardButton(
                 "⬅️ بازگشت",
-                callback_data="list_files"
+                callback_data="list_files",
             )
         ],
     ]
 
     await query.edit_message_text(
-        f"📄 فایل انتخاب‌شده:\n\n"
-        f"{file_name}",
+        f"📄 فایل انتخاب‌شده:\n\n{file_name}",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -190,13 +207,9 @@ async def rename_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     index = context.user_data.get("selected_index")
 
     if index is None:
-        await query.edit_message_text("❌ ابتدا یک فایل انتخاب کن.")
-        return ConversationHandler.END
-
-    files = context.user_data.get("files", [])
-
-    if index >= len(files):
-        await query.edit_message_text("❌ فایل پیدا نشد.")
+        await query.edit_message_text(
+            "❌ ابتدا یک فایل انتخاب کن."
+        )
         return ConversationHandler.END
 
     await query.edit_message_text(
@@ -211,7 +224,7 @@ async def rename_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_new_name(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
     new_name = safe_filename(update.message.text)
 
@@ -219,7 +232,9 @@ async def receive_new_name(
     files = context.user_data.get("files", [])
 
     if index is None or index >= len(files):
-        await update.message.reply_text("❌ فایل پیدا نشد.")
+        await update.message.reply_text(
+            "❌ فایل پیدا نشد."
+        )
         return ConversationHandler.END
 
     file_info = files[index]
@@ -247,22 +262,22 @@ async def receive_new_name(
             new_name,
         )
 
-        await update.message.reply_document(
-            document=str(output_path),
-            caption=(
-                f"📄 {new_name}.pdf\n\n"
-                f"Title: {new_name}\n"
-                f"Author: {AUTHOR}\n"
-                f"Subject: خالی"
-            ),
-        )
+        with open(output_path, "rb") as pdf_file:
+            await update.message.reply_document(
+                document=pdf_file,
+                caption=(
+                    f"📄 {new_name}.pdf\n\n"
+                    f"Title: {new_name}\n"
+                    f"Author: {AUTHOR}\n"
+                    f"Subject: خالی"
+                ),
+            )
 
-    # نام جدید فقط در لیست ربات ذخیره می‌شود
     file_info["name"] = f"{new_name}.pdf"
 
     await update.message.reply_text(
         "✅ انجام شد.\n\n"
-        "فایل موقت بلافاصله حذف شد."
+        "فایل موقت حذف شد."
     )
 
     return ConversationHandler.END
@@ -276,7 +291,9 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     files = context.user_data.get("files", [])
 
     if index is None or index >= len(files):
-        await query.edit_message_text("❌ فایل پیدا نشد.")
+        await query.edit_message_text(
+            "❌ فایل پیدا نشد."
+        )
         return
 
     file_info = files[index]
@@ -295,7 +312,9 @@ async def delete_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     files = context.user_data.get("files", [])
 
     if index is None or index >= len(files):
-        await query.edit_message_text("❌ فایل پیدا نشد.")
+        await query.edit_message_text(
+            "❌ فایل پیدا نشد."
+        )
         return
 
     deleted = files.pop(index)
@@ -304,14 +323,16 @@ async def delete_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(
         f"🗑 حذف شد:\n{deleted['name']}",
-        reply_markup=InlineKeyboardMarkup([
+        reply_markup=InlineKeyboardMarkup(
             [
-                InlineKeyboardButton(
-                    "📚 فایل‌های من",
-                    callback_data="list_files"
-                )
+                [
+                    InlineKeyboardButton(
+                        "📚 فایل‌های من",
+                        callback_data="list_files",
+                    )
+                ]
             ]
-        ]),
+        ),
     )
 
 
@@ -325,77 +346,119 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-def main():
-    if not BOT_TOKEN:
-        raise RuntimeError(
-            "BOT_TOKEN environment variable is missing."
+async def health():
+    return "OK"
+
+
+telegram_app.add_handler(
+    CommandHandler("start", start)
+)
+
+telegram_app.add_handler(
+    MessageHandler(
+        filters.Document.PDF,
+        receive_pdf,
+    )
+)
+
+rename_conversation = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(
+            rename_request,
+            pattern="^rename$",
         )
-
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    rename_conversation = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(
-                rename_request,
-                pattern="^rename$"
+    ],
+    states={
+        WAITING_FOR_NAME: [
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND,
+                receive_new_name,
             )
-        ],
-        states={
-            WAITING_FOR_NAME: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    receive_new_name
-                )
-            ]
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel)
-        ],
+        ]
+    },
+    fallbacks=[
+        CommandHandler("cancel", cancel)
+    ],
+)
+
+telegram_app.add_handler(rename_conversation)
+
+telegram_app.add_handler(
+    CallbackQueryHandler(
+        list_files,
+        pattern="^list_files$",
+    )
+)
+
+telegram_app.add_handler(
+    CallbackQueryHandler(
+        select_file,
+        pattern="^select:",
+    )
+)
+
+telegram_app.add_handler(
+    CallbackQueryHandler(
+        send_file,
+        pattern="^send$",
+    )
+)
+
+telegram_app.add_handler(
+    CallbackQueryHandler(
+        delete_file,
+        pattern="^delete$",
+    )
+)
+
+
+@app_web.route("/", methods=["GET"])
+def home():
+    return "PDF Bot is running."
+
+
+@app_web.route("/healthz", methods=["GET"])
+def healthz():
+    return "OK", 200
+
+
+@app_web.route("/telegram", methods=["POST"])
+async def telegram_webhook():
+    data = request.get_json(force=True)
+
+    update = Update.de_json(
+        data,
+        telegram_app.bot,
     )
 
-    app.add_handler(CommandHandler("start", start))
+    await telegram_app.process_update(update)
 
-    app.add_handler(
-        MessageHandler(
-            filters.Document.PDF,
-            receive_pdf
-        )
+    return "OK", 200
+
+
+@app_web.route("/set-webhook", methods=["GET"])
+async def set_webhook():
+    render_url = request.host_url.rstrip("/")
+
+    webhook_url = f"{render_url}/telegram"
+
+    await telegram_app.bot.set_webhook(
+        url=webhook_url
     )
 
-    app.add_handler(rename_conversation)
+    return f"Webhook set to: {webhook_url}", 200
 
-    app.add_handler(
-        CallbackQueryHandler(
-            list_files,
-            pattern="^list_files$"
-        )
-    )
 
-    app.add_handler(
-        CallbackQueryHandler(
-            select_file,
-            pattern="^select:"
-        )
-    )
-
-    app.add_handler(
-        CallbackQueryHandler(
-            send_file,
-            pattern="^send$"
-        )
-    )
-
-    app.add_handler(
-        CallbackQueryHandler(
-            delete_file,
-            pattern="^delete$"
-        )
-    )
-
-    print("Bot is running...")
-
-    app.run_polling()
+async def initialize_bot():
+    await telegram_app.initialize()
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+
+    asyncio.run(initialize_bot())
+
+    app_web.run(
+        host="0.0.0.0",
+        port=PORT,
+    )
