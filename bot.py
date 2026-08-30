@@ -4,7 +4,6 @@ import tempfile
 from pathlib import Path
 
 import fitz
-from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -16,24 +15,13 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 AUTHOR = "@Tarikhgan"
-
-PORT = int(os.environ.get("PORT", 10000))
-
-app_web = Flask(__name__)
-
-telegram_app = (
-    Application.builder()
-    .token(BOT_TOKEN)
-    .updater(None)
-    .build()
-)
 
 WAITING_FOR_NAME = 1
 
 
-def safe_filename(name):
+def safe_filename(name: str) -> str:
     name = name.strip()
 
     if name.lower().endswith(".pdf"):
@@ -45,11 +33,10 @@ def safe_filename(name):
     return name or "Untitled"
 
 
-def change_metadata(input_path, output_path, title):
+def change_metadata(input_path: str, output_path: str, title: str):
     doc = fitz.open(input_path)
 
     metadata = doc.metadata
-
     metadata["title"] = title
     metadata["author"] = AUTHOR
     metadata["subject"] = ""
@@ -89,7 +76,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     document = update.message.document
 
-    if not document.file_name.lower().endswith(".pdf"):
+    if not document.file_name or not document.file_name.lower().endswith(".pdf"):
         await update.message.reply_text(
             "❌ فقط فایل PDF قبول می‌کنم."
         )
@@ -97,25 +84,21 @@ async def receive_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     files = context.user_data.setdefault("files", [])
 
-    files.append(
-        {
-            "file_id": document.file_id,
-            "name": document.file_name,
-        }
-    )
+    files.append({
+        "file_id": document.file_id,
+        "name": document.file_name,
+    })
 
     await update.message.reply_text(
         f"✅ دریافت شد:\n{document.file_name}\n\n"
         f"تعداد فایل‌های فعلی: {len(files)}",
         reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "📚 فایل‌های من",
-                        callback_data="list_files",
-                    )
-                ]
-            ]
+            [[
+                InlineKeyboardButton(
+                    "📚 فایل‌های من",
+                    callback_data="list_files",
+                )
+            ]]
         ),
     )
 
@@ -135,14 +118,12 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
 
     for i, file_info in enumerate(files):
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    f"{i + 1}️⃣ {file_info['name']}",
-                    callback_data=f"select:{i}",
-                )
-            ]
-        )
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{i + 1}️⃣ {file_info['name']}",
+                callback_data=f"select:{i}",
+            )
+        ])
 
     await query.edit_message_text(
         "📚 فایل‌های شما:\n\n"
@@ -160,12 +141,12 @@ async def select_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     files = context.user_data.get("files", [])
 
     if index >= len(files):
-        await query.edit_message_text("❌ فایل پیدا نشد.")
+        await query.edit_message_text(
+            "❌ فایل پیدا نشد."
+        )
         return
 
     context.user_data["selected_index"] = index
-
-    file_name = files[index]["name"]
 
     keyboard = [
         [
@@ -195,18 +176,20 @@ async def select_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await query.edit_message_text(
-        f"📄 فایل انتخاب‌شده:\n\n{file_name}",
+        f"📄 فایل انتخاب‌شده:\n\n"
+        f"{files[index]['name']}",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
-async def rename_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def rename_request(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     query = update.callback_query
     await query.answer()
 
-    index = context.user_data.get("selected_index")
-
-    if index is None:
+    if context.user_data.get("selected_index") is None:
         await query.edit_message_text(
             "❌ ابتدا یک فایل انتخاب کن."
         )
@@ -263,6 +246,7 @@ async def receive_new_name(
         )
 
         with open(output_path, "rb") as pdf_file:
+
             await update.message.reply_document(
                 document=pdf_file,
                 caption=(
@@ -283,7 +267,10 @@ async def receive_new_name(
     return ConversationHandler.END
 
 
-async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_file(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     query = update.callback_query
     await query.answer()
 
@@ -296,15 +283,16 @@ async def send_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    file_info = files[index]
-
     await query.message.reply_document(
-        document=file_info["file_id"],
-        caption=f"📄 {file_info['name']}",
+        document=files[index]["file_id"],
+        caption=f"📄 {files[index]['name']}",
     )
 
 
-async def delete_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def delete_file(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     query = update.callback_query
     await query.answer()
 
@@ -324,19 +312,20 @@ async def delete_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"🗑 حذف شد:\n{deleted['name']}",
         reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "📚 فایل‌های من",
-                        callback_data="list_files",
-                    )
-                ]
-            ]
+            [[
+                InlineKeyboardButton(
+                    "📚 فایل‌های من",
+                    callback_data="list_files",
+                )
+            ]]
         ),
     )
 
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cancel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     context.user_data.pop("selected_index", None)
 
     await update.message.reply_text(
@@ -346,119 +335,86 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def health():
-    return "OK"
+def main():
 
-
-telegram_app.add_handler(
-    CommandHandler("start", start)
-)
-
-telegram_app.add_handler(
-    MessageHandler(
-        filters.Document.PDF,
-        receive_pdf,
-    )
-)
-
-rename_conversation = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(
-            rename_request,
-            pattern="^rename$",
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN environment variable is missing."
         )
-    ],
-    states={
-        WAITING_FOR_NAME: [
-            MessageHandler(
-                filters.TEXT & ~filters.COMMAND,
-                receive_new_name,
+
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    rename_conversation = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                rename_request,
+                pattern="^rename$",
             )
-        ]
-    },
-    fallbacks=[
-        CommandHandler("cancel", cancel)
-    ],
-)
-
-telegram_app.add_handler(rename_conversation)
-
-telegram_app.add_handler(
-    CallbackQueryHandler(
-        list_files,
-        pattern="^list_files$",
-    )
-)
-
-telegram_app.add_handler(
-    CallbackQueryHandler(
-        select_file,
-        pattern="^select:",
-    )
-)
-
-telegram_app.add_handler(
-    CallbackQueryHandler(
-        send_file,
-        pattern="^send$",
-    )
-)
-
-telegram_app.add_handler(
-    CallbackQueryHandler(
-        delete_file,
-        pattern="^delete$",
-    )
-)
-
-
-@app_web.route("/", methods=["GET"])
-def home():
-    return "PDF Bot is running."
-
-
-@app_web.route("/healthz", methods=["GET"])
-def healthz():
-    return "OK", 200
-
-
-@app_web.route("/telegram", methods=["POST"])
-async def telegram_webhook():
-    data = request.get_json(force=True)
-
-    update = Update.de_json(
-        data,
-        telegram_app.bot,
+        ],
+        states={
+            WAITING_FOR_NAME: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    receive_new_name,
+                )
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel)
+        ],
     )
 
-    await telegram_app.process_update(update)
-
-    return "OK", 200
-
-
-@app_web.route("/set-webhook", methods=["GET"])
-async def set_webhook():
-    render_url = request.host_url.rstrip("/")
-
-    webhook_url = f"{render_url}/telegram"
-
-    await telegram_app.bot.set_webhook(
-        url=webhook_url
+    application.add_handler(
+        CommandHandler("start", start)
     )
 
-    return f"Webhook set to: {webhook_url}", 200
+    application.add_handler(
+        MessageHandler(
+            filters.Document.PDF,
+            receive_pdf,
+        )
+    )
 
+    application.add_handler(
+        rename_conversation
+    )
 
-async def initialize_bot():
-    await telegram_app.initialize()
+    application.add_handler(
+        CallbackQueryHandler(
+            list_files,
+            pattern="^list_files$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            select_file,
+            pattern="^select:",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            send_file,
+            pattern="^send$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            delete_file,
+            pattern="^delete$",
+        )
+    )
+
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES
+    )
 
 
 if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(initialize_bot())
-
-    app_web.run(
-        host="0.0.0.0",
-        port=PORT,
-    )
+    main()
