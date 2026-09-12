@@ -32,6 +32,8 @@ RUBIKA_SESSION_NAME = "rubika_session"
 RUBIKA_CHANNEL_GUID = os.environ.get("RUBIKA_CHANNEL_GUID", "c0BE58O0069ec7e2a03509bc849a5095")
 
 LAST_ID_FILE = "last_id.txt"
+FAIL_COUNT_FILE = "fail_counts.txt"
+MAX_ATTEMPTS = 3
 
 
 def get_tg_session_string():
@@ -63,6 +65,24 @@ def get_last_processed_id():
 def save_last_processed_id(message_id):
     with open(LAST_ID_FILE, "w") as f:
         f.write(str(message_id))
+
+
+def load_fail_counts():
+    counts = {}
+    if os.path.exists(FAIL_COUNT_FILE):
+        with open(FAIL_COUNT_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and ":" in line:
+                    mid, cnt = line.split(":")
+                    counts[int(mid)] = int(cnt)
+    return counts
+
+
+def save_fail_counts(counts):
+    with open(FAIL_COUNT_FILE, "w") as f:
+        for mid, cnt in counts.items():
+            f.write(f"{mid}:{cnt}\n")
 
 
 async def handle_poll(tg_client, rubika_client, message):
@@ -156,6 +176,8 @@ async def main():
         if not new_messages:
             print("پیام جدیدی برای انتقال نیست.")
 
+        fail_counts = load_fail_counts()
+
         for message in new_messages:
             print(f"در حال پردازش پیام {message.id} ...")
 
@@ -172,22 +194,23 @@ async def main():
                         caption,
                         file_inline=file_path,
                         type="Image",
+                        parse_mode="markdown",
                     )
                     os.remove(file_path)
 
                 elif message.video:
                     file_path = await tg_client.download_media(message, file="temp_media")
-                    await rubika_client.send_video(RUBIKA_CHANNEL_GUID, file_path, caption=caption)
+                    await rubika_client.send_video(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
                     os.remove(file_path)
 
                 elif message.gif:
                     file_path = await tg_client.download_media(message, file="temp_media")
-                    await rubika_client.send_gif(RUBIKA_CHANNEL_GUID, file_path, caption=caption)
+                    await rubika_client.send_gif(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
                     os.remove(file_path)
 
                 elif message.voice:
                     file_path = await tg_client.download_media(message, file="temp_media")
-                    await rubika_client.send_voice(RUBIKA_CHANNEL_GUID, file_path, caption=caption)
+                    await rubika_client.send_voice(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
                     os.remove(file_path)
 
                 elif message.sticker:
@@ -197,22 +220,35 @@ async def main():
                 elif message.document:
                     # هر نوع فایل/سند دیگری که در دسته‌های بالا نبود
                     file_path = await tg_client.download_media(message, file="temp_media")
-                    await rubika_client.send_document(RUBIKA_CHANNEL_GUID, file_path, caption=caption)
+                    await rubika_client.send_document(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
                     os.remove(file_path)
 
                 elif caption:
-                    await rubika_client.send_message(RUBIKA_CHANNEL_GUID, caption)
+                    await rubika_client.send_message(RUBIKA_CHANNEL_GUID, caption, parse_mode="markdown")
 
                 else:
                     print(f"پیام {message.id} نوع ناشناخته یا خالی — رد شد.")
 
                 save_last_processed_id(message.id)
+                fail_counts.pop(message.id, None)
+                save_fail_counts(fail_counts)
                 print(f"پیام {message.id} با موفقیت منتقل شد.")
 
             except Exception as e:
-                print(f"خطا در پردازش پیام {message.id}: {e}")
-                # چون خطا داده، last_id رو آپدیت نمی‌کنیم تا دفعه‌ی بعد دوباره امتحان بشه
-                break
+                attempts_so_far = fail_counts.get(message.id, 0) + 1
+                fail_counts[message.id] = attempts_so_far
+                save_fail_counts(fail_counts)
+                print(f"خطا در پردازش پیام {message.id} (تلاش {attempts_so_far}/{MAX_ATTEMPTS}): {e}")
+
+                if attempts_so_far >= MAX_ATTEMPTS:
+                    print(f"پیام {message.id} بعد از {MAX_ATTEMPTS} تلاش ناموفق رد شد و پردازش ادامه پیدا می‌کند.")
+                    save_last_processed_id(message.id)
+                    fail_counts.pop(message.id, None)
+                    save_fail_counts(fail_counts)
+                    continue
+                else:
+                    # هنوز فرصت باقیه — این‌بار متوقف می‌شیم تا دفعه‌ی بعد دوباره امتحان بشه
+                    break
 
     await tg_client.disconnect()
 
