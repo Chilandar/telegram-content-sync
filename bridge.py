@@ -156,6 +156,15 @@ async def handle_poll(tg_client, rubika_client, message):
         )
 
 
+def get_download_target(message, default_name):
+    """اسم اصلی فایل رو از پیام تلگرام می‌گیره؛ اگه نداشت، از یه اسم پیش‌فرض استفاده می‌کنه."""
+    original_name = message.file.name if message.file else None
+    if original_name:
+        return original_name
+    ext = message.file.ext if message.file and message.file.ext else ""
+    return f"{default_name}{ext}"
+
+
 async def main():
     prepare_rubika_session_file()
     tg_session_string = get_tg_session_string()
@@ -188,7 +197,7 @@ async def main():
                     await handle_poll(tg_client, rubika_client, message)
 
                 elif message.photo:
-                    file_path = await tg_client.download_media(message, file="temp_media")
+                    file_path = await tg_client.download_media(message, file=get_download_target(message, "photo.jpg"))
                     await rubika_client.send_message(
                         RUBIKA_CHANNEL_GUID,
                         caption,
@@ -199,17 +208,17 @@ async def main():
                     os.remove(file_path)
 
                 elif message.video:
-                    file_path = await tg_client.download_media(message, file="temp_media")
+                    file_path = await tg_client.download_media(message, file=get_download_target(message, "video.mp4"))
                     await rubika_client.send_video(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
                     os.remove(file_path)
 
                 elif message.gif:
-                    file_path = await tg_client.download_media(message, file="temp_media")
+                    file_path = await tg_client.download_media(message, file=get_download_target(message, "gif.mp4"))
                     await rubika_client.send_gif(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
                     os.remove(file_path)
 
                 elif message.voice:
-                    file_path = await tg_client.download_media(message, file="temp_media")
+                    file_path = await tg_client.download_media(message, file=get_download_target(message, "voice.ogg"))
                     await rubika_client.send_voice(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
                     os.remove(file_path)
 
@@ -219,7 +228,7 @@ async def main():
 
                 elif message.document:
                     # هر نوع فایل/سند دیگری که در دسته‌های بالا نبود
-                    file_path = await tg_client.download_media(message, file="temp_media")
+                    file_path = await tg_client.download_media(message, file=get_download_target(message, "file"))
                     await rubika_client.send_document(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
                     os.remove(file_path)
 
