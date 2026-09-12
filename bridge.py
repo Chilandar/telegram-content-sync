@@ -121,8 +121,9 @@ async def handle_poll(tg_client, rubika_client, message):
             question=question,
             options=options,
             type="Quiz",
+            allows_multiple_answers=False,
             correct_option_index=correct_index,
-            explanation=explanation,
+            explanation=explanation or "",
         )
     else:
         if is_quiz:
