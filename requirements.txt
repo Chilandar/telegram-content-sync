@@ -1,4 +1,0 @@
-telethon
-rubpy
-opencv-python-headless
-numpy
