@@ -67,10 +67,15 @@ def save_last_processed_id(message_id):
 
 async def handle_poll(tg_client, rubika_client, message):
     """نظرسنجی/کوییز تلگرام رو می‌خونه و روی روبیکا دوباره می‌سازه."""
+
+    def plain_text(value):
+        """بعضی نسخه‌های تلگرام متن رو به‌صورت TextWithEntities برمی‌گردونن، نه رشته‌ی ساده."""
+        return getattr(value, "text", value)
+
     tg_poll = message.poll.poll
-    question = tg_poll.question
+    question = plain_text(tg_poll.question)
     answers = tg_poll.answers  # لیست PollAnswer با .text و .option (bytes)
-    options = [answer.text for answer in answers]
+    options = [plain_text(answer.text) for answer in answers]
 
     is_quiz = tg_poll.quiz
     correct_index = None
@@ -84,7 +89,7 @@ async def handle_poll(tg_client, rubika_client, message):
         for voter_result in results.results:
             if getattr(voter_result, "correct", False):
                 idx = option_to_index.get(voter_result.option)
-                sol = getattr(results, "solution", None)
+                sol = plain_text(getattr(results, "solution", None)) if getattr(results, "solution", None) else None
                 return idx, sol
         return None, None
 
