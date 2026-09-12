@@ -65,6 +65,71 @@ def save_last_processed_id(message_id):
         f.write(str(message_id))
 
 
+async def handle_poll(tg_client, rubika_client, message):
+    """نظرسنجی/کوییز تلگرام رو می‌خونه و روی روبیکا دوباره می‌سازه."""
+    tg_poll = message.poll.poll
+    question = tg_poll.question
+    answers = tg_poll.answers  # لیست PollAnswer با .text و .option (bytes)
+    options = [answer.text for answer in answers]
+
+    is_quiz = tg_poll.quiz
+    correct_index = None
+    explanation = None
+    poll_results = message.poll.results
+
+    def extract_correct_index(results):
+        if not results or not results.results:
+            return None, None
+        option_to_index = {answer.option: idx for idx, answer in enumerate(answers)}
+        for voter_result in results.results:
+            if getattr(voter_result, "correct", False):
+                idx = option_to_index.get(voter_result.option)
+                sol = getattr(results, "solution", None)
+                return idx, sol
+        return None, None
+
+    if is_quiz:
+        already_voted = bool(poll_results and poll_results.results and
+                              any(getattr(r, "chosen", False) for r in poll_results.results))
+
+        if already_voted:
+            correct_index, explanation = extract_correct_index(poll_results)
+        else:
+            # هنوز رأی داده نشده — خودمون با گزینه‌ی اول رأی می‌دیم تا جواب درست آشکار بشه
+            from telethon.tl.functions.messages import SendVoteRequest
+            try:
+                await tg_client(SendVoteRequest(
+                    peer=message.peer_id,
+                    msg_id=message.id,
+                    options=[answers[0].option],
+                ))
+                await asyncio.sleep(2)
+                refreshed = await tg_client.get_messages(message.peer_id, ids=message.id)
+                correct_index, explanation = extract_correct_index(refreshed.poll.results)
+            except Exception as vote_error:
+                print(f"رأی خودکار روی کوییز {message.id} ناموفق بود: {vote_error}")
+
+    if is_quiz and correct_index is not None:
+        print(f"پیام {message.id} کوییز است — با گزینه‌ی درست شماره {correct_index} منتقل می‌شود.")
+        await rubika_client.create_poll(
+            RUBIKA_CHANNEL_GUID,
+            question=question,
+            options=options,
+            type="Quiz",
+            correct_option_index=correct_index,
+            explanation=explanation,
+        )
+    else:
+        if is_quiz:
+            print(f"پیام {message.id} کوییز است ولی گزینه‌ی درست پیدا نشد — به‌صورت نظرسنجی معمولی منتقل می‌شود.")
+        await rubika_client.create_poll(
+            RUBIKA_CHANNEL_GUID,
+            question=question,
+            options=options,
+            type="Regular",
+        )
+
+
 async def main():
     prepare_rubika_session_file()
     tg_session_string = get_tg_session_string()
@@ -91,9 +156,11 @@ async def main():
             caption = message.text or ""
 
             try:
-                if message.photo:
-                    # دانلود عکس و ارسال آن با کپشن به روبیکا
-                    file_path = await tg_client.download_media(message, file="temp_photo.jpg")
+                if message.poll:
+                    await handle_poll(tg_client, rubika_client, message)
+
+                elif message.photo:
+                    file_path = await tg_client.download_media(message, file="temp_media")
                     await rubika_client.send_message(
                         RUBIKA_CHANNEL_GUID,
                         caption,
@@ -101,11 +168,37 @@ async def main():
                         type="Image",
                     )
                     os.remove(file_path)
+
+                elif message.video:
+                    file_path = await tg_client.download_media(message, file="temp_media")
+                    await rubika_client.send_video(RUBIKA_CHANNEL_GUID, file_path, caption=caption)
+                    os.remove(file_path)
+
+                elif message.gif:
+                    file_path = await tg_client.download_media(message, file="temp_media")
+                    await rubika_client.send_gif(RUBIKA_CHANNEL_GUID, file_path, caption=caption)
+                    os.remove(file_path)
+
+                elif message.voice:
+                    file_path = await tg_client.download_media(message, file="temp_media")
+                    await rubika_client.send_voice(RUBIKA_CHANNEL_GUID, file_path, caption=caption)
+                    os.remove(file_path)
+
+                elif message.sticker:
+                    # نگاشت استیکرهای تلگرام به استیکرهای روبیکا پیاده‌سازی نشده — فعلاً رد می‌شود
+                    print(f"پیام {message.id} استیکر است — انتقال استیکر فعلاً پشتیبانی نمی‌شود، رد شد.")
+
+                elif message.document:
+                    # هر نوع فایل/سند دیگری که در دسته‌های بالا نبود
+                    file_path = await tg_client.download_media(message, file="temp_media")
+                    await rubika_client.send_document(RUBIKA_CHANNEL_GUID, file_path, caption=caption)
+                    os.remove(file_path)
+
                 elif caption:
-                    # پیام فقط متنی
                     await rubika_client.send_message(RUBIKA_CHANNEL_GUID, caption)
+
                 else:
-                    print(f"پیام {message.id} نه متن دارد نه عکس — رد شد (شاید نظرسنجی/ویدیو باشد).")
+                    print(f"پیام {message.id} نوع ناشناخته یا خالی — رد شد.")
 
                 save_last_processed_id(message.id)
                 print(f"پیام {message.id} با موفقیت منتقل شد.")
