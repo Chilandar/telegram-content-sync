@@ -191,6 +191,7 @@ async def main():
             print(f"در حال پردازش پیام {message.id} ...")
 
             caption = message.text or ""
+            print(f"متن خام پیام (برای بررسی): {caption!r}")
 
             try:
                 if message.poll:
