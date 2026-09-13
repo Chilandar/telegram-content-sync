@@ -40,14 +40,14 @@ _rubpy_markdown.MARKDOWN_RE = re.compile(
 )
 
 # --- تنظیمات تلگرام ---
-# اول از متغیر محیطی (GitHub Secrets) می‌خونه؛ اگه نبود، از فایل محلی
-TG_API_ID = int(os.environ.get("TG_API_ID", "12345678"))
-TG_API_HASH = os.environ.get("TG_API_HASH", "your_api_hash_here")
-SOURCE_CHANNEL = int(os.environ.get("SOURCE_CHANNEL", "-1001969747781"))
+# این مقادیر همیشه از طریق GitHub Secrets فرستاده می‌شن
+TG_API_ID = int(os.environ.get("TG_API_ID"))
+TG_API_HASH = os.environ.get("TG_API_HASH")
+SOURCE_CHANNEL = int(os.environ.get("SOURCE_CHANNEL"))
 
 # --- تنظیمات روبیکا ---
 RUBIKA_SESSION_NAME = "rubika_session"
-RUBIKA_CHANNEL_GUID = os.environ.get("RUBIKA_CHANNEL_GUID", "c0BE58O0069ec7e2a03509bc849a5095")
+RUBIKA_CHANNEL_GUID = os.environ.get("RUBIKA_CHANNEL_GUID")
 
 LAST_ID_FILE = "last_id.txt"
 FAIL_COUNT_FILE = "fail_counts.txt"
