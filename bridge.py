@@ -17,9 +17,27 @@
 import asyncio
 import os
 import base64
+import re
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from rubpy import Client as RubikaClient
+
+# --- رفع باگ rubpy: الگوی بولد/ایتالیک و... اصلی روی متن‌های چندخطی کار نمی‌کنه ---
+# (چون کاراکتر \n رو صریحاً از داخل ** ** و مشابهش حذف کرده بود)
+import rubpy.parser.markdown as _rubpy_markdown
+
+_rubpy_markdown.MARKDOWN_RE = re.compile(
+    r"(?:^(?:> ?[^\n]*\n?)+)"
+    r"|```([\s\S]*?)```"
+    r"|\*\*([\s\S]+?)\*\*"
+    r"|`([^\n`]+?)`"
+    r"|__([\s\S]+?)__"
+    r"|--([\s\S]+?)--"
+    r"|~~([\s\S]+?)~~"
+    r"|\|\|([\s\S]+?)\|\|"
+    r"|\[([^\]]+?)\]\((\S+)\)",
+    flags=re.DOTALL | re.MULTILINE,
+)
 
 # --- تنظیمات تلگرام ---
 # اول از متغیر محیطی (GitHub Secrets) می‌خونه؛ اگه نبود، از فایل محلی
