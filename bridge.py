@@ -11,8 +11,18 @@
     متغیر محیطی CHANNEL_MAPPINGS باید یه JSON از این شکل باشه:
     [
       {"source": -1001969747781, "destination": "c0BE58O0069ec7e2a03509bc849a5095"},
-      {"source": -1009999999999, "destination": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      {
+        "source": -1009999999999,
+        "destination": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "strip_links": true,
+        "own_tag": "🏛️ @Tarikhgan"
+      }
     ]
+
+    strip_links (اختیاری، پیش‌فرض false): اگه true باشه، همه‌ی لینک‌ها و منشن‌های
+    یوزرنیم (@something) از متن پیام حذف می‌شن.
+    own_tag (اختیاری): اگه بذاری، بعد از پاک‌سازی، این متن به انتهای پیام اضافه می‌شه
+    (مثلاً برای جایگزین‌کردن آیدی حذف‌شده با آیدی خودت).
 
 نحوه‌ی اجرا:
     python bridge.py
@@ -181,9 +191,40 @@ def get_download_target(message, default_name):
     return f"{default_name}{ext}"
 
 
-async def process_message(tg_client, rubika_client, message, destination_guid):
+def clean_caption(text, mapping):
+    """اگه mapping بخواد، لینک/آیدی/منشن و متن‌های دلخواه رو از متن حذف می‌کنه و آیدی خودمون رو جایگزین می‌کنه."""
+    remove_texts = mapping.get("remove_texts") or []
+    strip_links = mapping.get("strip_links", False)
+
+    if not strip_links and not remove_texts:
+        return text
+
+    if strip_links:
+        # حذف لینک‌های تلگرام، روبیکا و هر لینک http/https دیگه
+        text = re.sub(r"https?://\S+", "", text)
+        text = re.sub(r"t\.me/\S+", "", text)
+        # حذف منشن‌های یوزرنیم (مثلاً @channel_name)
+        text = re.sub(r"@[\w\d_]+", "", text)
+
+    # حذف متن‌های دقیقی که خودت مشخص کردی (هر تعداد که بخوای)
+    for phrase in remove_texts:
+        text = text.replace(phrase, "")
+
+    # پاک‌کردن فاصله‌های اضافی که از حذف‌ها باقی می‌مونه
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.strip()
+
+    own_tag = mapping.get("own_tag")
+    if own_tag:
+        text = f"{text}\n\n{own_tag}" if text else own_tag
+
+    return text
+
+
+async def process_message(tg_client, rubika_client, message, destination_guid, mapping):
     """یک پیام رو بر اساس نوعش به کانال مقصد روبیکا می‌فرسته."""
-    caption = message.text or ""
+    caption = clean_caption(message.text or "", mapping)
 
     if message.poll:
         await handle_poll(tg_client, rubika_client, message, destination_guid)
@@ -225,7 +266,9 @@ async def process_message(tg_client, rubika_client, message, destination_guid):
         print(f"پیام {message.id} نوع ناشناخته یا خالی — رد شد.")
 
 
-async def process_mapping(tg_client, rubika_client, source_channel, destination_guid, last_ids, fail_counts):
+async def process_mapping(tg_client, rubika_client, mapping, last_ids, fail_counts):
+    source_channel = int(mapping["source"])
+    destination_guid = mapping["destination"]
     last_id = last_ids.get(source_channel, 0)
     print(f"\n=== کانال {source_channel} → {destination_guid} (آخرین شناسه: {last_id}) ===")
 
@@ -243,7 +286,7 @@ async def process_mapping(tg_client, rubika_client, source_channel, destination_
         print(f"در حال پردازش پیام {message.id} ...")
 
         try:
-            await process_message(tg_client, rubika_client, message, destination_guid)
+            await process_message(tg_client, rubika_client, message, destination_guid, mapping)
             last_ids[source_channel] = message.id
             save_last_ids(last_ids)
             fail_counts.pop(key, None)
@@ -283,13 +326,10 @@ async def main():
 
     async with RubikaClient(name=RUBIKA_SESSION_NAME) as rubika_client:
         for mapping in CHANNEL_MAPPINGS:
-            source_channel = int(mapping["source"])
-            destination_guid = mapping["destination"]
-            await process_mapping(tg_client, rubika_client, source_channel, destination_guid, last_ids, fail_counts)
+            await process_mapping(tg_client, rubika_client, mapping, last_ids, fail_counts)
 
     await tg_client.disconnect()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
