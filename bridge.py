@@ -1,21 +1,26 @@
 """
-اسکریپت اصلی انتقال محتوا از تلگرام به روبیکا
+اسکریپت اصلی انتقال محتوا از تلگرام به روبیکا (پشتیبانی از چند کانال مبدا/مقصد)
 
 کارش:
-1. آخرین شناسه‌ی پیام پردازش‌شده رو از فایل last_id.txt می‌خونه
-2. پیام‌های جدیدتر از اون رو از کانال تلگرام می‌گیره
-3. هر پیام رو (متن + عکس، اگه داشت) به کانال روبیکا می‌فرسته
-4. شناسه‌ی آخرین پیام پردازش‌شده رو دوباره ذخیره می‌کنه
+1. لیست جفت‌های «کانال مبدا تلگرام → کانال مقصد روبیکا» رو از تنظیمات می‌خونه
+2. برای هر جفت، آخرین شناسه‌ی پیام پردازش‌شده رو جدا نگه می‌داره
+3. پیام‌های جدید هر کانال مبدا رو می‌خونه و به همون کانال مقصدش می‌فرسته
+4. شناسه‌ی آخرین پیام هر کانال رو دوباره ذخیره می‌کنه
+
+نحوه‌ی تنظیم چند کانال:
+    متغیر محیطی CHANNEL_MAPPINGS باید یه JSON از این شکل باشه:
+    [
+      {"source": -1001969747781, "destination": "c0BE58O0069ec7e2a03509bc849a5095"},
+      {"source": -1009999999999, "destination": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+    ]
 
 نحوه‌ی اجرا:
     python bridge.py
-
-این اسکریپت رو می‌شه هر چند وقت یک‌بار (دستی یا با زمان‌بندی) اجرا کرد؛
-هر بار فقط پیام‌های جدید از دفعه‌ی قبل رو منتقل می‌کنه.
 """
 
 import asyncio
 import os
+import json
 import base64
 import re
 from telethon import TelegramClient
@@ -23,7 +28,6 @@ from telethon.sessions import StringSession
 from rubpy import Client as RubikaClient
 
 # --- رفع باگ rubpy: الگوی بولد/ایتالیک و... اصلی روی متن‌های چندخطی کار نمی‌کنه ---
-# (چون کاراکتر \n رو صریحاً از داخل ** ** و مشابهش حذف کرده بود)
 import rubpy.parser.markdown as _rubpy_markdown
 
 _rubpy_markdown.MARKDOWN_RE = re.compile(
@@ -40,17 +44,17 @@ _rubpy_markdown.MARKDOWN_RE = re.compile(
 )
 
 # --- تنظیمات تلگرام ---
-# این مقادیر همیشه از طریق GitHub Secrets فرستاده می‌شن
 TG_API_ID = int(os.environ.get("TG_API_ID"))
 TG_API_HASH = os.environ.get("TG_API_HASH")
-SOURCE_CHANNEL = int(os.environ.get("SOURCE_CHANNEL"))
 
 # --- تنظیمات روبیکا ---
 RUBIKA_SESSION_NAME = "rubika_session"
-RUBIKA_CHANNEL_GUID = os.environ.get("RUBIKA_CHANNEL_GUID")
 
-LAST_ID_FILE = "last_id.txt"
-FAIL_COUNT_FILE = "fail_counts.txt"
+# --- لیست جفت‌های مبدا/مقصد ---
+CHANNEL_MAPPINGS = json.loads(os.environ.get("CHANNEL_MAPPINGS", "[]"))
+
+LAST_IDS_FILE = "last_ids.json"
+FAIL_COUNT_FILE = "fail_counts.json"
 MAX_ATTEMPTS = 3
 
 
@@ -63,7 +67,6 @@ def get_tg_session_string():
 
 
 def prepare_rubika_session_file():
-    """اگه RUBIKA_SESSION_B64 توی محیط بود، فایل session روبیکا رو از روش می‌سازه."""
     b64_value = os.environ.get("RUBIKA_SESSION_B64")
     if b64_value:
         session_bytes = base64.b64decode(b64_value)
@@ -71,48 +74,45 @@ def prepare_rubika_session_file():
             f.write(session_bytes)
 
 
-def get_last_processed_id():
-    if os.path.exists(LAST_ID_FILE):
-        with open(LAST_ID_FILE, "r") as f:
+def load_last_ids():
+    """دیکشنری {شناسه‌ی کانال مبدا: آخرین شناسه‌ی پیام پردازش‌شده}"""
+    if os.path.exists(LAST_IDS_FILE):
+        with open(LAST_IDS_FILE, "r") as f:
             content = f.read().strip()
             if content:
-                return int(content)
-    return 0
+                return {int(k): v for k, v in json.loads(content).items()}
+    return {}
 
 
-def save_last_processed_id(message_id):
-    with open(LAST_ID_FILE, "w") as f:
-        f.write(str(message_id))
+def save_last_ids(last_ids):
+    with open(LAST_IDS_FILE, "w") as f:
+        json.dump({str(k): v for k, v in last_ids.items()}, f)
 
 
 def load_fail_counts():
-    counts = {}
+    """دیکشنری {"source_channel:message_id": تعداد شکست}"""
     if os.path.exists(FAIL_COUNT_FILE):
         with open(FAIL_COUNT_FILE, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line and ":" in line:
-                    mid, cnt = line.split(":")
-                    counts[int(mid)] = int(cnt)
-    return counts
+            content = f.read().strip()
+            if content:
+                return json.loads(content)
+    return {}
 
 
 def save_fail_counts(counts):
     with open(FAIL_COUNT_FILE, "w") as f:
-        for mid, cnt in counts.items():
-            f.write(f"{mid}:{cnt}\n")
+        json.dump(counts, f)
 
 
-async def handle_poll(tg_client, rubika_client, message):
+async def handle_poll(tg_client, rubika_client, message, destination_guid):
     """نظرسنجی/کوییز تلگرام رو می‌خونه و روی روبیکا دوباره می‌سازه."""
 
     def plain_text(value):
-        """بعضی نسخه‌های تلگرام متن رو به‌صورت TextWithEntities برمی‌گردونن، نه رشته‌ی ساده."""
         return getattr(value, "text", value)
 
     tg_poll = message.poll.poll
     question = plain_text(tg_poll.question)
-    answers = tg_poll.answers  # لیست PollAnswer با .text و .option (bytes)
+    answers = tg_poll.answers
     options = [plain_text(answer.text) for answer in answers]
 
     is_quiz = tg_poll.quiz
@@ -138,7 +138,6 @@ async def handle_poll(tg_client, rubika_client, message):
         if already_voted:
             correct_index, explanation = extract_correct_index(poll_results)
         else:
-            # هنوز رأی داده نشده — خودمون با گزینه‌ی اول رأی می‌دیم تا جواب درست آشکار بشه
             from telethon.tl.functions.messages import SendVoteRequest
             try:
                 await tg_client(SendVoteRequest(
@@ -155,7 +154,7 @@ async def handle_poll(tg_client, rubika_client, message):
     if is_quiz and correct_index is not None:
         print(f"پیام {message.id} کوییز است — با گزینه‌ی درست شماره {correct_index} منتقل می‌شود.")
         await rubika_client.create_poll(
-            RUBIKA_CHANNEL_GUID,
+            destination_guid,
             question=question,
             options=options,
             type="Quiz",
@@ -167,7 +166,7 @@ async def handle_poll(tg_client, rubika_client, message):
         if is_quiz:
             print(f"پیام {message.id} کوییز است ولی گزینه‌ی درست پیدا نشد — به‌صورت نظرسنجی معمولی منتقل می‌شود.")
         await rubika_client.create_poll(
-            RUBIKA_CHANNEL_GUID,
+            destination_guid,
             question=question,
             options=options,
             type="Regular",
@@ -175,7 +174,6 @@ async def handle_poll(tg_client, rubika_client, message):
 
 
 def get_download_target(message, default_name):
-    """اسم اصلی فایل رو از پیام تلگرام می‌گیره؛ اگه نداشت، از یه اسم پیش‌فرض استفاده می‌کنه."""
     original_name = message.file.name if message.file else None
     if original_name:
         return original_name
@@ -183,103 +181,115 @@ def get_download_target(message, default_name):
     return f"{default_name}{ext}"
 
 
+async def process_message(tg_client, rubika_client, message, destination_guid):
+    """یک پیام رو بر اساس نوعش به کانال مقصد روبیکا می‌فرسته."""
+    caption = message.text or ""
+
+    if message.poll:
+        await handle_poll(tg_client, rubika_client, message, destination_guid)
+
+    elif message.photo:
+        file_path = await tg_client.download_media(message, file=get_download_target(message, "photo.jpg"))
+        await rubika_client.send_message(
+            destination_guid, caption, file_inline=file_path, type="Image", parse_mode="markdown",
+        )
+        os.remove(file_path)
+
+    elif message.video:
+        file_path = await tg_client.download_media(message, file=get_download_target(message, "video.mp4"))
+        await rubika_client.send_video(destination_guid, file_path, caption=caption, parse_mode="markdown")
+        os.remove(file_path)
+
+    elif message.gif:
+        file_path = await tg_client.download_media(message, file=get_download_target(message, "gif.mp4"))
+        await rubika_client.send_gif(destination_guid, file_path, caption=caption, parse_mode="markdown")
+        os.remove(file_path)
+
+    elif message.voice:
+        file_path = await tg_client.download_media(message, file=get_download_target(message, "voice.ogg"))
+        await rubika_client.send_voice(destination_guid, file_path, caption=caption, parse_mode="markdown")
+        os.remove(file_path)
+
+    elif message.sticker:
+        print(f"پیام {message.id} استیکر است — انتقال استیکر فعلاً پشتیبانی نمی‌شود، رد شد.")
+
+    elif message.document:
+        file_path = await tg_client.download_media(message, file=get_download_target(message, "file"))
+        await rubika_client.send_document(destination_guid, file_path, caption=caption, parse_mode="markdown")
+        os.remove(file_path)
+
+    elif caption:
+        await rubika_client.send_message(destination_guid, caption, parse_mode="markdown")
+
+    else:
+        print(f"پیام {message.id} نوع ناشناخته یا خالی — رد شد.")
+
+
+async def process_mapping(tg_client, rubika_client, source_channel, destination_guid, last_ids, fail_counts):
+    last_id = last_ids.get(source_channel, 0)
+    print(f"\n=== کانال {source_channel} → {destination_guid} (آخرین شناسه: {last_id}) ===")
+
+    new_messages = []
+    async for message in tg_client.iter_messages(source_channel, min_id=last_id):
+        new_messages.append(message)
+    new_messages.reverse()
+
+    if not new_messages:
+        print("پیام جدیدی برای انتقال نیست.")
+        return
+
+    for message in new_messages:
+        key = f"{source_channel}:{message.id}"
+        print(f"در حال پردازش پیام {message.id} ...")
+
+        try:
+            await process_message(tg_client, rubika_client, message, destination_guid)
+            last_ids[source_channel] = message.id
+            save_last_ids(last_ids)
+            fail_counts.pop(key, None)
+            save_fail_counts(fail_counts)
+            print(f"پیام {message.id} با موفقیت منتقل شد.")
+
+        except Exception as e:
+            attempts_so_far = fail_counts.get(key, 0) + 1
+            fail_counts[key] = attempts_so_far
+            save_fail_counts(fail_counts)
+            print(f"خطا در پردازش پیام {message.id} (تلاش {attempts_so_far}/{MAX_ATTEMPTS}): {e}")
+
+            if attempts_so_far >= MAX_ATTEMPTS:
+                print(f"پیام {message.id} بعد از {MAX_ATTEMPTS} تلاش ناموفق رد شد و پردازش ادامه پیدا می‌کند.")
+                last_ids[source_channel] = message.id
+                save_last_ids(last_ids)
+                fail_counts.pop(key, None)
+                save_fail_counts(fail_counts)
+                continue
+            else:
+                break
+
+
 async def main():
+    if not CHANNEL_MAPPINGS:
+        print("خطا: CHANNEL_MAPPINGS خالی یا تنظیم نشده است.")
+        return
+
     prepare_rubika_session_file()
     tg_session_string = get_tg_session_string()
-
-    last_id = get_last_processed_id()
-    print(f"آخرین شناسه‌ی پردازش‌شده: {last_id}")
 
     tg_client = TelegramClient(StringSession(tg_session_string), TG_API_ID, TG_API_HASH)
     await tg_client.start()
 
+    last_ids = load_last_ids()
+    fail_counts = load_fail_counts()
+
     async with RubikaClient(name=RUBIKA_SESSION_NAME) as rubika_client:
-        # پیام‌های جدیدتر از last_id رو به ترتیب قدیم‌به‌جدید می‌گیریم
-        new_messages = []
-        async for message in tg_client.iter_messages(SOURCE_CHANNEL, min_id=last_id):
-            new_messages.append(message)
-        new_messages.reverse()  # قدیمی‌ترین اول پردازش بشه
-
-        if not new_messages:
-            print("پیام جدیدی برای انتقال نیست.")
-
-        fail_counts = load_fail_counts()
-
-        for message in new_messages:
-            print(f"در حال پردازش پیام {message.id} ...")
-
-            caption = message.text or ""
-            print(f"متن خام پیام (برای بررسی): {caption!r}")
-
-            try:
-                if message.poll:
-                    await handle_poll(tg_client, rubika_client, message)
-
-                elif message.photo:
-                    file_path = await tg_client.download_media(message, file=get_download_target(message, "photo.jpg"))
-                    await rubika_client.send_message(
-                        RUBIKA_CHANNEL_GUID,
-                        caption,
-                        file_inline=file_path,
-                        type="Image",
-                        parse_mode="markdown",
-                    )
-                    os.remove(file_path)
-
-                elif message.video:
-                    file_path = await tg_client.download_media(message, file=get_download_target(message, "video.mp4"))
-                    await rubika_client.send_video(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
-                    os.remove(file_path)
-
-                elif message.gif:
-                    file_path = await tg_client.download_media(message, file=get_download_target(message, "gif.mp4"))
-                    await rubika_client.send_gif(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
-                    os.remove(file_path)
-
-                elif message.voice:
-                    file_path = await tg_client.download_media(message, file=get_download_target(message, "voice.ogg"))
-                    await rubika_client.send_voice(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
-                    os.remove(file_path)
-
-                elif message.sticker:
-                    # نگاشت استیکرهای تلگرام به استیکرهای روبیکا پیاده‌سازی نشده — فعلاً رد می‌شود
-                    print(f"پیام {message.id} استیکر است — انتقال استیکر فعلاً پشتیبانی نمی‌شود، رد شد.")
-
-                elif message.document:
-                    # هر نوع فایل/سند دیگری که در دسته‌های بالا نبود
-                    file_path = await tg_client.download_media(message, file=get_download_target(message, "file"))
-                    await rubika_client.send_document(RUBIKA_CHANNEL_GUID, file_path, caption=caption, parse_mode="markdown")
-                    os.remove(file_path)
-
-                elif caption:
-                    await rubika_client.send_message(RUBIKA_CHANNEL_GUID, caption, parse_mode="markdown")
-
-                else:
-                    print(f"پیام {message.id} نوع ناشناخته یا خالی — رد شد.")
-
-                save_last_processed_id(message.id)
-                fail_counts.pop(message.id, None)
-                save_fail_counts(fail_counts)
-                print(f"پیام {message.id} با موفقیت منتقل شد.")
-
-            except Exception as e:
-                attempts_so_far = fail_counts.get(message.id, 0) + 1
-                fail_counts[message.id] = attempts_so_far
-                save_fail_counts(fail_counts)
-                print(f"خطا در پردازش پیام {message.id} (تلاش {attempts_so_far}/{MAX_ATTEMPTS}): {e}")
-
-                if attempts_so_far >= MAX_ATTEMPTS:
-                    print(f"پیام {message.id} بعد از {MAX_ATTEMPTS} تلاش ناموفق رد شد و پردازش ادامه پیدا می‌کند.")
-                    save_last_processed_id(message.id)
-                    fail_counts.pop(message.id, None)
-                    save_fail_counts(fail_counts)
-                    continue
-                else:
-                    # هنوز فرصت باقیه — این‌بار متوقف می‌شیم تا دفعه‌ی بعد دوباره امتحان بشه
-                    break
+        for mapping in CHANNEL_MAPPINGS:
+            source_channel = int(mapping["source"])
+            destination_guid = mapping["destination"]
+            await process_mapping(tg_client, rubika_client, source_channel, destination_guid, last_ids, fail_counts)
 
     await tg_client.disconnect()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
