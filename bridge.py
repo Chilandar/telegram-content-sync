@@ -330,6 +330,12 @@ async def main():
 
     await tg_client.disconnect()
 
+    # یه فایل ضربان قلب (heartbeat) همیشه آپدیت می‌شه تا گیت‌هاب بعد از ۶۰ روز
+    # بی‌کامیتی، اجرای خودکار (cron) این ریپازیتوری رو غیرفعال نکنه.
+    import datetime
+    with open("last_run.txt", "w") as f:
+        f.write(datetime.datetime.utcnow().isoformat())
+
 
 if __name__ == "__main__":
     asyncio.run(main())
