@@ -222,9 +222,10 @@ def clean_caption(text, mapping):
     return text
 
 
-async def process_message(tg_client, rubika_client, message, destination_guid, mapping):
+async def process_message(tg_client, rubika_client, message, destination_guid, mapping, caption_override=None):
     """یک پیام رو بر اساس نوعش به کانال مقصد روبیکا می‌فرسته."""
-    caption = clean_caption(message.text or "", mapping)
+    raw_text = message.text if caption_override is None else caption_override
+    caption = clean_caption(raw_text or "", mapping)
 
     if message.poll:
         await handle_poll(tg_client, rubika_client, message, destination_guid)
@@ -281,12 +282,30 @@ async def process_mapping(tg_client, rubika_client, mapping, last_ids, fail_coun
         print("پیام جدیدی برای انتقال نیست.")
         return
 
+    # پیدا کردن آلبوم‌ها: برای هر grouped_id، کپشن مشترک و شناسه‌ی آخرین عکسش رو پیدا می‌کنیم
+    group_caption = {}
+    group_last_id = {}
+    for message in new_messages:
+        if message.grouped_id is not None:
+            if message.text:
+                group_caption[message.grouped_id] = message.text
+            group_last_id[message.grouped_id] = max(
+                group_last_id.get(message.grouped_id, 0), message.id
+            )
+
     for message in new_messages:
         key = f"{source_channel}:{message.id}"
         print(f"در حال پردازش پیام {message.id} ...")
 
+        caption_override = None
+        if message.grouped_id is not None:
+            if message.id == group_last_id.get(message.grouped_id):
+                caption_override = group_caption.get(message.grouped_id, "")
+            else:
+                caption_override = ""  # فقط آخرین عکس آلبوم کپشن می‌گیره
+
         try:
-            await process_message(tg_client, rubika_client, message, destination_guid, mapping)
+            await process_message(tg_client, rubika_client, message, destination_guid, mapping, caption_override)
             last_ids[source_channel] = message.id
             save_last_ids(last_ids)
             fail_counts.pop(key, None)
